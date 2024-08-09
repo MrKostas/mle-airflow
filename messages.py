@@ -2,9 +2,9 @@ from airflow.providers.telegram.hooks.telegram import TelegramHook
 from airflow.models import Variable
 
 def send_telegram_success_message(context):
-    telegram_token = Variable.get('6561370081:AAFXM60UHNm9YPg43JFYK6yX1lkPD6wHl44')
-    telegram_chat_id = Variable.get('-4224413310')
-    hook = TelegramHook(telegram_conn_id='mle_airflow_MrKostas',
+    telegram_token = Variable.get('telegram_token')
+    telegram_chat_id = Variable.get('telegram_chat_id')
+    hook = TelegramHook(telegram_conn_id='telegram_bot',
                         token = telegram_token,
                         chat_id = telegram_chat_id)
     dag = context['ti'].dag_id
@@ -17,9 +17,9 @@ def send_telegram_success_message(context):
     })
 
 def send_telegram_failure_message(context):
-    telegram_token = Variable.get('6561370081:AAFXM60UHNm9YPg43JFYK6yX1lkPD6wHl44')
-    telegram_chat_id = Variable.get('-4224413310')
-    hook = TelegramHook(telegram_conn_id = 'mle_airflow_MrKostas',
+    telegram_token = Variable.get('telegram_token')
+    telegram_chat_id = Variable.get('telegram_chat_id')
+    hook = TelegramHook(telegram_conn_id = 'telegram_bot',
                        token = telegram_token,
                        chat_id = telegram_chat_id)
     dag = context['ti'].dag_id
