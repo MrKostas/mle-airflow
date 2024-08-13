@@ -5,10 +5,10 @@ from airflow.decorators import dag, task
     schedule='@once',
     start_date=pendulum.datetime(2023, 1, 1, tz="UTC"),
     catchup=False,
-    dag_id = 'churn',
+    dag_id= 'clean_churn',
     tags=["ETL"]
 )
-def churn():
+def clean_churn_dataset():
     import pandas as pd
     import numpy as np
     from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -20,9 +20,10 @@ def churn():
         
         hook = PostgresHook('destination_db')
         db_conn = hook.get_sqlalchemy_engine()
+
         metadata = MetaData()
-        users_table = Table(
-            'users_churn',
+        churn_table = Table(
+            'clean_users_churn',
             metadata,
             Column("id", Integer, primary_key=True, autoincrement=True),
             Column("customer_id", String),
@@ -46,28 +47,20 @@ def churn():
             Column("dependents", String),
             Column("multiple_lines", String),
             Column("target", Integer),
-            UniqueConstraint('customer_id', name = 'unique_customer_constraint')
-        )
-        if not inspect(db_conn).has_table(users_table.name):
+            UniqueConstraint('customer_id', name = 'unique_clean_customer_constraint'))
+        
+        if not sqlalchemy.inspect(db_conn).has_table(churn_table.name):
             metadata.create_all(db_conn)
             
     @task()
-    def extract(**kwargs):
+    def extract():
 
-        hook = PostgresHook('source_db')
+        hook = PostgresHook('destination_db')
         conn = hook.get_conn()
         sql = f"""
-        select
-            c.customer_id, c.begin_date, c.end_date, c.type, c.paperless_billing, c.payment_method, c.monthly_charges, c.total_charges,
-            i.internet_service, i.online_security, i.online_backup, i.device_protection, i.tech_support, i.streaming_tv, i.streaming_movies,
-            p.gender, p.senior_citizen, p.partner, p.dependents,
-            ph.multiple_lines
-        from contracts as c
-        left join internet as i on i.customer_id = c.customer_id
-        left join personal as p on p.customer_id = c.customer_id
-        left join phone as ph on ph.customer_id = c.customer_id
+        select * from users_churn
         """
-        data = pd.read_sql(sql, conn)
+        data = pd.read_sql(sql, conn).drop(columns=['id'])
         conn.close()
         return data
 
@@ -75,13 +68,43 @@ def churn():
     def transform(data: pd.DataFrame):
         data['target'] = (data['end_date'] != 'No').astype(int)
         data['end_date'].replace({'No': None}, inplace=True)
+        def remove_duplicates(data: pd.DataFrame):
+            feature_cols = data.columns.drop('customer_id').tolist()
+            is_duplicated_features = data.duplicated(subset = feature_cols, keep = False)
+            data = data[~is_duplicated_features].reset_index(drop = True)
+            return data
+        def fill_missing_values(data: pd.DataFrame):
+            cols_with_nans = data.isnull().sum()
+            cols_with_nans = cols_with_nans[cols_with_nans > 0].index.drop('end_date')
+            for col in cols_with_nans:
+                if data[col].dtype in [float, int]:
+                    fill_value = data[col].mean()
+                elif data[col].dtype == 'object':
+                    fill_value = data[col].mode.iloc[0]
+                data[col] = data[col].fillna(fill_value)
+            return data
+        num_cols = data.select_dtypes(['float']).columns
+        threshold = 1.5
+        potential_outliers = pd.DataFrame()
+
+        for col in num_cols:
+            Q1 = data[col].quantile(0.25)
+            Q3 = data[col].quantile(0.75)
+            IQR = Q3 - Q1
+            margin = threshold * IQR
+            lower = Q1 - margin
+            upper = Q3 + margin
+            potential_outliers[col] = ~data[col].between(lower, upper)
+        
+        data = data.drop(potential_outliers.column.tolist(), axis = 1)
         return data
 
     @task()
     def load(data: pd.DataFrame):
         hook = PostgresHook('destination_db')
+        data['end_date'] = data['end_date'].astype('object').replace(np.nan, None)
         hook.insert_rows(
-            table="users_churn",
+            table="clean_users_churn",
             replace=True,
             target_fields=data.columns.tolist(),
             replace_index=['customer_id'],
@@ -92,4 +115,5 @@ def churn():
     data = extract()
     transformed_data = transform(data)
     load(transformed_data)
-churn()
+
+clean_churn_dataset()
